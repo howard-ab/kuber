@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: log-agent
+  namespace: custom-logging
+spec:
+  selector:
+    matchLabels:
+      app: log-agent
+  template:
+    metadata:
+      labels:
+        app: log-agent
+    spec:
+      containers:
+        - name: log-agent
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              echo "Waiting for app.log files from emptyDir volumes..."
+              while true; do
+                LOG_FILES=""
+
+                for file in $(find /var/lib/kubelet/pods -type f -path "*/volumes/kubernetes.io~empty-dir/app-logs/app.log" 2>/dev/null); do
+                  LOG_FILES="$LOG_FILES $file"
+                done
+
+                if [ -n "$LOG_FILES" ]; then
+                  echo "Found app log files:$LOG_FILES"
+                  exec tail -n+1 -F $LOG_FILES
+                fi
+
+                echo "custom-app logs are not available yet"
+                sleep 10
+              done
+          volumeMounts:
+            - name: kubelet-pods
+              mountPath: /var/lib/kubelet/pods
+              readOnly: true
+      volumes:
+        - name: kubelet-pods
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory

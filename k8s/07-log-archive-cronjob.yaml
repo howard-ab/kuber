@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: app-log-archive
+  namespace: custom-logging
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: archive-logs
+              image: busybox:1.36
+              command:
+                - /bin/sh
+                - -c
+              args:
+                - |
+                  set -e
+                  mkdir -p /app/logs
+                  wget -qO /app/logs/app.log http://custom-app-service/logs
+                  ARCHIVE_NAME="/tmp/app-logs-$(date +%Y%m%d-%H%M%S).tar.gz"
+                  tar -czf "${ARCHIVE_NAME}" /app/logs
+                  echo "Archive created: ${ARCHIVE_NAME}"
+                  ls -lh /tmp
+              volumeMounts:
+                - name: job-logs
+                  mountPath: /app/logs
+          volumes:
+            - name: job-logs
+              emptyDir: {}

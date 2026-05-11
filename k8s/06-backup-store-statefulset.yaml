@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-store
+  namespace: custom-logging
+spec:
+  clusterIP: None
+  selector:
+    app: backup-store
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: backup-store
+  namespace: custom-logging
+spec:
+  serviceName: backup-store
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backup-store
+  template:
+    metadata:
+      labels:
+        app: backup-store
+    spec:
+      containers:
+        - name: backup-store
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              mkdir -p /data/archives
+              echo "backup-store is ready" > /data/index.html
+              exec httpd -f -p 8080 -h /data
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: backup-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: backup-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi

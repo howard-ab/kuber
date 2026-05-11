@@ -100,4 +100,3 @@ kubectl apply -f k8s/01-custom-app-configmap.yaml
 Через короткое время Kubernetes обновит смонтированные файлы в контейнерах, и приложение начнёт использовать новые значения.
 
 Для `StatefulSet` с `backup-store` нужен рабочий `StorageClass`. В `Minikube` он обычно доступен по умолчанию.
-

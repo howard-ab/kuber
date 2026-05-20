@@ -1,0 +1,17 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: custom-app-service-policy
+  namespace: custom-logging
+spec:
+  host: custom-app-service.custom-logging.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+    connectionPool:
+      tcp:
+        maxConnections: 3
+      http:
+        http1MaxPendingRequests: 5
+    tls:
+      mode: ISTIO_MUTUAL

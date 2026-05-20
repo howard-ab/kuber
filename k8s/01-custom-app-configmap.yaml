@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: custom-app-config
+  namespace: custom-logging
+data:
+  welcome_message: "Welcome to the custom app"
+  welcome_header: "Custom Student App"
+  log_level: "INFO"
+  server_port: "8080"

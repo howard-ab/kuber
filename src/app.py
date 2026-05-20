@@ -1,9 +1,12 @@
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
@@ -11,6 +14,27 @@ LOG_DIR = os.environ.get("LOG_DIR", "/app/logs")
 LOG_FILE = os.path.join(LOG_DIR, "app.log")
 DEFAULT_PORT = 8080
 LOG_LOCK = threading.Lock()
+METRICS_LOCK = threading.Lock()
+LOG_DURATION_TOTAL_SECONDS = 0.0
+LOG_DURATION_COUNT = 0
+
+LOG_REQUESTS_TOTAL = Counter(
+    "custom_app_log_requests_total",
+    "Total number of POST /log requests.",
+)
+LOG_ATTEMPTS_TOTAL = Counter(
+    "custom_app_log_attempts_total",
+    "POST /log attempts grouped by result.",
+    ["result"],
+)
+LOG_REQUEST_DURATION_SECONDS = Histogram(
+    "custom_app_log_request_duration_seconds",
+    "Time spent processing POST /log requests.",
+)
+LOG_REQUEST_AVERAGE_DURATION_SECONDS = Gauge(
+    "custom_app_log_request_average_duration_seconds",
+    "Average time spent processing POST /log requests.",
+)
 
 
 def read_config_value(name, default):
@@ -60,6 +84,20 @@ def read_logs():
         return ""
 
 
+def record_log_duration(duration_seconds):
+    global LOG_DURATION_COUNT
+    global LOG_DURATION_TOTAL_SECONDS
+
+    LOG_REQUEST_DURATION_SECONDS.observe(duration_seconds)
+
+    with METRICS_LOCK:
+        LOG_DURATION_COUNT += 1
+        LOG_DURATION_TOTAL_SECONDS += duration_seconds
+        LOG_REQUEST_AVERAGE_DURATION_SECONDS.set(
+            LOG_DURATION_TOTAL_SECONDS / LOG_DURATION_COUNT
+        )
+
+
 class CustomAppHandler(BaseHTTPRequestHandler):
     server_version = "CustomAppHTTP/1.0"
 
@@ -85,6 +123,11 @@ class CustomAppHandler(BaseHTTPRequestHandler):
         self._write_headers(status_code, "application/json; charset=utf-8")
         self.wfile.write(encoded_body)
 
+    def _send_metrics(self):
+        encoded_body = generate_latest()
+        self._write_headers(HTTPStatus.OK, CONTENT_TYPE_LATEST)
+        self.wfile.write(encoded_body)
+
     def _read_json_body(self):
         content_length = int(self.headers.get("Content-Length", "0"))
         raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
@@ -105,6 +148,10 @@ class CustomAppHandler(BaseHTTPRequestHandler):
             self._send_text(HTTPStatus.OK, read_logs())
             return
 
+        if self.path == "/metrics":
+            self._send_metrics()
+            return
+
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
 
     def do_POST(self):
@@ -112,21 +159,30 @@ class CustomAppHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             return
 
+        start_time = time.perf_counter()
+        LOG_REQUESTS_TOTAL.inc()
+
         try:
-            payload = self._read_json_body()
-        except json.JSONDecodeError:
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON"})
-            return
+            try:
+                payload = self._read_json_body()
+            except json.JSONDecodeError:
+                LOG_ATTEMPTS_TOTAL.labels(result="failure").inc()
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid JSON"})
+                return
 
-        message = payload.get("message")
+            message = payload.get("message")
 
-        if not isinstance(message, str) or not message.strip():
-            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Field 'message' is required"})
-            return
+            if not isinstance(message, str) or not message.strip():
+                LOG_ATTEMPTS_TOTAL.labels(result="failure").inc()
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Field 'message' is required"})
+                return
 
-        settings = load_runtime_settings()
-        append_log(message.strip(), settings["log_level"], self._pod_name())
-        self._send_json(HTTPStatus.CREATED, {"result": "saved"})
+            settings = load_runtime_settings()
+            append_log(message.strip(), settings["log_level"], self._pod_name())
+            LOG_ATTEMPTS_TOTAL.labels(result="success").inc()
+            self._send_json(HTTPStatus.CREATED, {"result": "saved"})
+        finally:
+            record_log_duration(time.perf_counter() - start_time)
 
     def log_message(self, fmt, *args):
         print(

@@ -37,6 +37,8 @@ spec:
             exact: /status
         - uri:
             exact: /logs
+        - uri:
+            exact: /metrics
       route:
         - destination:
             host: custom-app-service.custom-logging.svc.cluster.local

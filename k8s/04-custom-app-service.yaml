@@ -3,6 +3,9 @@ kind: Service
 metadata:
   name: custom-app-service
   namespace: custom-logging
+  labels:
+    app: custom-app
+    monitoring: custom-app
 spec:
   selector:
     app: custom-app

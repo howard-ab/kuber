@@ -1,0 +1,51 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: custom-app-routes
+  namespace: custom-logging
+spec:
+  hosts:
+    - "*"
+  gateways:
+    - custom-app-gateway
+  http:
+    - name: post-log-with-failure-policy
+      match:
+        - uri:
+            exact: /log
+          method:
+            exact: POST
+      fault:
+        delay:
+          fixedDelay: 2s
+          percentage:
+            value: 100
+      timeout: 1s
+      retries:
+        attempts: 2
+        retryOn: gateway-error,connect-failure,refused-stream,reset,5xx
+      route:
+        - destination:
+            host: custom-app-service.custom-logging.svc.cluster.local
+            port:
+              number: 80
+    - name: app-routes
+      match:
+        - uri:
+            exact: /
+        - uri:
+            exact: /status
+        - uri:
+            exact: /logs
+        - uri:
+            exact: /metrics
+      route:
+        - destination:
+            host: custom-app-service.custom-logging.svc.cluster.local
+            port:
+              number: 80
+    - name: not-found
+      directResponse:
+        status: 404
+        body:
+          string: "Not found"

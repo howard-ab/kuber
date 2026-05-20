@@ -2,7 +2,7 @@
 
 ## Что входит в проект
 
-- Простое пользовательское API на Python без внешних зависимостей
+- Простое пользовательское API на Python с экспортом Prometheus-метрик
 - Dockerfile для сборки образа `custom-app:1.0`
 - Kubernetes-манифесты для `ConfigMap`, тестового `Pod`, `Deployment`, `Service`, `DaemonSet`, `StatefulSet` и `CronJob`
 - Скрипт `deploy.sh` для автоматического развёртывания
@@ -18,6 +18,11 @@
 - `k8s/05-log-agent-daemonset.yaml` — DaemonSet для чтения логов с узлов
 - `k8s/06-backup-store-statefulset.yaml` — StatefulSet для отдельного хранилища
 - `k8s/07-log-archive-cronjob.yaml` — CronJob для архивирования логов раз в 10 минут
+- `k8s/08-istio-gateway.yaml` — Istio Gateway для HTTP-трафика на порту 80
+- `k8s/09-istio-virtualservice.yaml` — внешние маршруты, fallback 404 и политика для `POST /log`
+- `k8s/10-istio-destinationrule.yaml` — балансировка, connection pool и mTLS для сервиса приложения
+- `k8s/11-custom-app-servicemonitor.yaml` — сбор `/metrics` приложения через Prometheus Operator
+- `k8s/12-custom-app-envoy-podmonitor.yaml` — сбор Envoy sidecar-метрик Istio через Prometheus Operator
 - `deploy.sh` — общий скрипт развёртывания
 
 ## REST API
@@ -26,10 +31,18 @@
 - `GET /status` — возвращает JSON `{"status": "ok"}`
 - `POST /log` — принимает JSON `{"message": "some log"}` и пишет запись в `/app/logs/app.log`
 - `GET /logs` — возвращает содержимое `/app/logs/app.log`
+- `GET /metrics` — экспортирует метрики в формате Prometheus
 
 Приложение читает настройки из `ConfigMap`, смонтированного в `/app/config`.
 Файлы `welcome_message`, `welcome_header` и `log_level` перечитываются на каждом запросе, поэтому их изменение применяется автоматически без пересоздания Pod.
 Параметр `server_port` тоже хранится в `ConfigMap`, но используется при старте процесса, поэтому его обычно меняют вместе с пересозданием Pod или Deployment.
+
+Пользовательские Prometheus-метрики:
+
+- `custom_app_log_requests_total` — общее количество вызовов `POST /log`
+- `custom_app_log_attempts_total{result="success|failure"}` — успешные и неуспешные попытки логирования
+- `custom_app_log_request_duration_seconds_*` — histogram времени обработки `POST /log`
+- `custom_app_log_request_average_duration_seconds` — среднее время обработки `POST /log`
 
 ## Запуск
 
@@ -41,13 +54,15 @@ chmod +x deploy.sh
 ```
 
 Скрипт рассчитан на локальный кластер `Minikube` или `kind`: он собирает Docker-образ и при наличии этих инструментов загружает его в кластер автоматически.
+Перед развёртыванием приложения скрипт устанавливает Istio через `istioctl install --set profile=demo -y`, включает sidecar injection для namespace `custom-logging` и применяет Istio-манифесты.
+Prometheus разворачивается через официальный Helm-чарт `prometheus-community/kube-prometheus-stack`; для него применяются `ServiceMonitor` приложения и `PodMonitor` Envoy sidecar-ов.
 
 ## Проверка работы
 
 После развёртывания выполнить:
 
 ```bash
-kubectl port-forward -n custom-logging svc/custom-app-service 8080:80
+kubectl port-forward -n istio-system svc/istio-ingressgateway 8080:80
 ```
 
 И в другом терминале:
@@ -59,10 +74,31 @@ curl -X POST http://127.0.0.1:8080/log \
   -H "Content-Type: application/json" \
   -d '{"message": "test"}'
 curl -i http://127.0.0.1:8080/logs
+curl -i http://127.0.0.1:8080/metrics
+curl -i http://127.0.0.1:8080/wrong
 ```
 
 Для проверки балансировки удобно смотреть заголовок `X-Pod-Name`.
 Так как у каждой реплики свой `emptyDir`, файл логов хранится отдельно в каждом Pod.
+Маршрут `POST /log` через Istio Gateway получает искусственную задержку 2 секунды, timeout 1 секунду и до 2 retry-попыток, поэтому внешний запрос должен завершаться ошибкой по timeout.
+
+## Проверка Prometheus
+
+После развёртывания открыть Prometheus:
+
+```bash
+kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090
+```
+
+В интерфейсе `http://127.0.0.1:9090` проверить запросы:
+
+```promql
+custom_app_log_requests_total
+custom_app_log_attempts_total
+custom_app_log_request_average_duration_seconds
+istio_requests_total
+istio_request_duration_seconds_count
+```
 
 ## Проверка DaemonSet и CronJob
 
@@ -100,4 +136,3 @@ kubectl apply -f k8s/01-custom-app-configmap.yaml
 Через короткое время Kubernetes обновит смонтированные файлы в контейнерах, и приложение начнёт использовать новые значения.
 
 Для `StatefulSet` с `backup-store` нужен рабочий `StorageClass`. В `Minikube` он обычно доступен по умолчанию.
-

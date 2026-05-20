@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-app-deployment
+  namespace: custom-logging
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: custom-app
+  template:
+    metadata:
+      labels:
+        app: custom-app
+    spec:
+      containers:
+        - name: custom-app
+          image: custom-app:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: CONFIG_DIR
+              value: /app/config
+            - name: LOG_DIR
+              value: /app/logs
+          volumeMounts:
+            - name: app-logs
+              mountPath: /app/logs
+            - name: app-config
+              mountPath: /app/config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: app-logs
+          emptyDir: {}
+        - name: app-config
+          configMap:
+            name: custom-app-config
